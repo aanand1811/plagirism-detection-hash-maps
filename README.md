@@ -2,8 +2,6 @@
 
 A document-level plagiarism detection system that uses Rabin-Karp rolling hashes and Jaccard similarity to identify copied or paraphrased content across a large corpus of documents.
 
-Built for MSML606 at the University of Maryland.
-
 ---
 
 ## What Does This App Do?
