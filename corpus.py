@@ -24,8 +24,7 @@ def load_corpus(filepath: str, k: int = 5):
             clean = preprocess(raw_text)
             documents[doc_id] = clean
             metadata[doc_id]  = {
-                'category': row.get('category', 'unknown'),
-                'source'  : row.get('source',   'unknown'),
+                'source': row.get('source', 'unknown'),
             }
 
     index       = build_index(documents, k)

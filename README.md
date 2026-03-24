@@ -6,28 +6,39 @@ Built for MSML606 at the University of Maryland.
 
 ---
 
-## What Does This App Do?
+## Overview
 
-Imagine you have thousands of essays or research papers and you want to know if any of them were copied from each other. Reading through all of them manually would take days. This app solves that problem automatically.
+Given a reference corpus of source documents and a query text, the system identifies which corpus documents the query was likely copied from, ranked by similarity score. A score of 1.0 means identical content; lower scores indicate partial overlap.
 
-You give it a document, and within seconds it tells you which documents in the corpus are suspiciously similar, along with a similarity score. A score of 1.0 means the documents are identical. A score of 0.5 means roughly half the content overlaps.
-
-No external libraries are needed. Everything runs on standard Python.
+No external libraries are needed. Everything runs on standard Python. (For GUI, we have used streamlit)
 
 ---
 
 ## Table of Contents
 
-- [How It Works](#how-it-works)
-- [Project Structure](#project-structure)
-- [Setup and Quickstart](#setup-and-quickstart)
-- [Configuration Parameters](#configuration-parameters)
-- [Dataset](#dataset)
-- [Algorithm Details](#algorithm-details)
-- [Why Use Hashing? Algorithm vs Naive Approach](#why-use-hashing-algorithm-vs-naive-approach)
-- [Noise and Edge Case Handling](#noise-and-edge-case-handling)
-- [AI Usage Statement](#ai-usage-statement)
-- [Team](#team)
+- [Plagiarism Detection using Hash Maps](#plagiarism-detection-using-hash-maps)
+  - [Overview](#overview)
+  - [Table of Contents](#table-of-contents)
+  - [How It Works](#how-it-works)
+  - [Project Structure](#project-structure)
+  - [Setup and Quickstart](#setup-and-quickstart)
+    - [Requirements](#requirements)
+    - [Step 1: Generate the Corpus](#step-1-generate-the-corpus)
+    - [Step 2: Run the Detector](#step-2-run-the-detector)
+    - [Expected Output](#expected-output)
+  - [Configuration Parameters](#configuration-parameters)
+  - [Dataset](#dataset)
+    - [corpus.csv Format](#corpuscsv-format)
+  - [Algorithm Details](#algorithm-details)
+    - [Rolling Hash (Rabin-Karp)](#rolling-hash-rabin-karp)
+    - [Inverted Index](#inverted-index)
+    - [Jaccard Similarity](#jaccard-similarity)
+    - [Overall Complexity](#overall-complexity)
+  - [Why Rabin-Karp Instead of Plain K-gram Hashing?](#why-rabin-karp-instead-of-plain-k-gram-hashing)
+    - [Concrete Example](#concrete-example)
+  - [Noise and Edge Case Handling](#noise-and-edge-case-handling)
+  - [AI Usage Statement](#ai-usage-statement)
+  - [Team](#team)
 
 ---
 
@@ -81,13 +92,13 @@ Your document
 
 ### Step 1: Generate the Corpus
 
-This script downloads three public domain books from Project Gutenberg, splits them into 150-word chunks, and creates verbatim plagiarised copies for 30% of the documents.
+This script downloads three public domain books from Project Gutenberg and splits them into 150-word chunks to form the reference corpus.
 
 ```bash
 python generate_corpus.py
 ```
 
-This writes a file called `corpus.csv` with approximately 3,000 documents (~2,400 original, ~700 plagiarised).
+This writes a file called `corpus.csv` with approximately 2,400 documents.
 
 Note: `corpus.csv` is excluded from version control via `.gitignore`. You must generate it locally before running the detector.
 
@@ -102,11 +113,11 @@ To test with a known plagiarised passage, open `detector.py` and replace the `qu
 ### Expected Output
 
 ```
-Index built: 48321 unique k-gram hashes
+Index built: 861325 unique k-gram hashes
 
 Plagiarism detected:
-  moby_dick_0042  score=0.87  category=plagiarized
-  moby_dick_0043  score=0.61  category=plagiarized
+  moby_dick_0042  score=0.87
+  moby_dick_0043  score=0.61
 ```
 
 ---
@@ -118,9 +129,8 @@ These can be adjusted at the top of `detector.py`:
 | Parameter | Default | What It Controls |
 |---|---|---|
 | `k` | `5` | K-gram window size. Smaller values are more sensitive to short matches. Larger values reduce false positives. |
-| `threshold` | `0.5` | Jaccard score cutoff. Documents scoring above this are flagged. Lower values flag more documents. |
+| `threshold` | `0.1` | Jaccard score cutoff. Documents scoring above this are flagged. Lower values flag more documents. |
 | `CHUNK_WORDS` | `150` | Number of words per document chunk when generating the corpus. |
-| `PLAGIARISM_RATE` | `0.3` | Fraction of the generated corpus that contains plagiarised content. |
 
 ---
 
@@ -130,20 +140,19 @@ The corpus is generated from three public domain books sourced from [Project Gut
 
 - *Moby Dick* by Herman Melville
 - *Pride and Prejudice* by Jane Austen
-- *A Tale of Two Cities* by Charles Dickens
+- *Alice's Adventures in Wonderland* by Lewis Carroll
 
-Each book is split into 150-word chunks. 30% of those chunks are duplicated with minor modifications to simulate real-world plagiarism.
+Each book is downloaded from Project Gutenberg and split into 150-word chunks. These chunks form the reference corpus — the library of source documents that submitted text is checked against.
 
 ### corpus.csv Format
 
 | Column | Description |
 |---|---|
 | `file_name` | Unique document ID, e.g. `moby_dick_0042` |
-| `text` | Raw document text |
-| `category` | Ground truth label: `original` or `plagiarized` |
-| `source` | The origin book or source document ID |
+| `text` | Raw document text (150 words per chunk) |
+| `source` | The book the chunk was taken from |
 
-The corpus contains over 10,000 unique k-gram hashes across ~3,000 documents, satisfying the scale requirements of this project.
+The corpus contains over 800,000 unique k-gram hashes across ~2,400 documents.
 
 ---
 
@@ -194,28 +203,35 @@ A score of 1.0 is a perfect match. A score of 0.0 means no overlap at all.
 
 ---
 
-## Why Use Hashing? Algorithm vs Naive Approach
+## Why Rabin-Karp Instead of Plain K-gram Hashing?
 
-| | **Naive Approach** (direct text comparison) | **This App** (Rabin-Karp + Hash Index) |
+The naive way to hash k-grams is to recompute each hash from scratch — iterating over all k characters of every window. For a document of length L characters with k-gram size k, that costs O(k) per k-gram and O(L x k) total.
+
+Rabin-Karp eliminates that redundancy with a rolling update. When the window slides one character to the right, the new hash is derived from the previous one in O(1) by:
+- Subtracting the contribution of the character that left the window
+- Adding the contribution of the character that entered
+
+```
+new_hash = (old_hash - ord(out_char) + M) * P + ord(in_char) * P^(k-1)  mod M
+```
+
+This brings total hashing cost down to O(L) regardless of k.
+
+| | **Plain K-gram Hashing** | **Rabin-Karp Rolling Hash** |
 |---|---|---|
-| **How it works** | Compare every word of the query against every word of every document, one by one | Compute a short numeric fingerprint (hash) for each k-gram, then look up matches instantly in a hash table |
-| **Speed on 10,000 docs** | Gets slower with every document added. Checking 1 query against 10k docs of 150 words each means around 1.5 million comparisons | Index is built once. Each query only touches docs that share at least one hash, typically a tiny fraction of the corpus |
-| **Time complexity** | O(Q x N x L): query length times number of docs times doc length | O(L) to hash the query plus O(matches) to score, independent of corpus size |
-| **Handles near-duplicates?** | Only catches exact copy paste | Catches paraphrasing and partial overlap via Jaccard similarity over k-gram fingerprints |
-| **Memory** | No index needed, but must scan all docs for every query | Stores an inverted index in memory, trading space for speed |
-| **Tunable sensitivity** | No. Either it matches or it does not | Yes. Adjust k-gram size and Jaccard threshold to control false positives vs false negatives |
-| **Real world usability** | Impractical beyond a few hundred documents | Scales to tens of thousands of documents with sub-second query time |
+| **Cost per k-gram** | O(k) — rehash all k characters each time | O(1) — slide the window, update incrementally |
+| **Total cost for document of length L** | O(L x k) | O(L) |
+| **Impact when k is large** | Gets significantly slower as k grows | No change — cost is independent of k |
+| **Implementation complexity** | Simple loop | Slightly more complex, but a one-time implementation cost |
 
 ### Concrete Example
 
-Suppose the corpus has 10,000 documents, each 150 words long, and the query is also 150 words.
+For a 150-word document (~900 characters) with k=10:
 
-- **Naive approach:** up to 1,500,000 word level comparisons per query
-- **This app:** hash the 146 k-grams (k=5) in the query, look up 146 entries in the hash table, then score only the small set of candidate docs that share at least one hash. Typically under 1,000 operations total.
+- **Plain hashing:** ~900 × 10 = 9,000 character operations
+- **Rabin-Karp:** ~900 operations, regardless of k
 
-### Why K-grams Instead of Whole Word Matching?
-
-Matching individual words would flag any document that shares common words like "the", "and", or "is". K-grams, which are overlapping windows of k consecutive words, capture phrase level similarity instead. This is a much stronger signal of actual copying. The rolling hash computes all k-gram hashes in O(1) per step rather than re-hashing from scratch each time.
+The difference compounds across a corpus of 2,400 documents: plain hashing costs roughly 21.6 million operations to build the index; Rabin-Karp costs 2.16 million.
 
 ---
 
@@ -246,7 +262,8 @@ The following components were written manually without AI assistance:
 - All code comments and this README
 
 AI tools were used only for the following auxiliary components:
-- The Streamlit UI (`app.py`), per the course policy permitting AI use for UI components
+- The Streamlit UI (`app.py`), per the course policy permitting AI use for UI components. 
+- Reference for Rabin-karp algo - [here](https://en.wikipedia.org/wiki/Rabin%E2%80%93Karp_algorithm) 
 
 ---
 
